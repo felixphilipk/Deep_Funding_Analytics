@@ -18,7 +18,7 @@ Before you begin, ensure you have met the following requirements:
 
 ### Required Files 📁
 
-You will need the following data files to run the model which is located in data folder for real time data please visit the deeep funding graph github repo :
+You will need the following data files to run the model which is located in data folder for real time data please visit the deep funding graph github repo :
 
 1. **`data.csv`**: Training data containing funding allocations between pairs of repositories.
 2. **`test.csv`**: Test data containing pairs of repositories for which you want to predict funding allocation.
