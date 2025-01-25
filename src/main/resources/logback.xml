@@ -1,0 +1,17 @@
+<!-- logback.xml -->
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <!-- encoder -->
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="com.deepfunding" level="DEBUG" /> <!-- Set to DEBUG to capture debug logs -->
+    <logger name="org.apache.commons.math3" level="DEBUG" />
+    <logger name="org.apache.commons.math3.optim" level="DEBUG" />
+
+    <root level="DEBUG">
+        <appender-ref ref="STDOUT" />
+    </root>
+</configuration>
