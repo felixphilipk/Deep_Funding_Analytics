@@ -42,14 +42,14 @@ cd dependency-graph-analyzer
 ⚠️GitHub Token is required in the configuration otherwise it will result in an error please add your github token.
 
 If you have any application properties to set, you can modify the `src/main/resources/application.properties` file:
-
-🚨```properties
+🔑
+```properties
 github.token= " Your Github Token Here "
 spring.servlet.multipart.max-file-size=50MB
 spring.servlet.multipart.max-request-size=50MB
 ```
 
-## 🏃 Running the Application
+## 🔌 Running the Application
 
 You can run the application using Maven or by building a JAR file.
 
@@ -83,13 +83,13 @@ The application will start on `http://localhost:8080`.
 
 The application exposes a RESTful API that you can interact with to run the analysis.
 
-### API Endpoint
+### API Endpoint ⚡
 
 - **URL:** `http://localhost:8080/api/analysis/run`
 - **Method:** `POST`
 - **Content-Type:** `multipart/form-data`
 
-### Request Parameters
+### Request Parameters 📨
 
 The API expects the following form-data parameters:
 
@@ -97,7 +97,7 @@ The API expects the following form-data parameters:
 - `testData`: The `test.csv` file containing test data.
 - `dependencyGraph`: The `dependency_graph.csv` file representing the dependency graph.
 
-### Example Request Using `curl`
+### Example Request Using `curl` 📤
 
 ```bash
 curl -X POST \
@@ -109,7 +109,7 @@ curl -X POST \
 
 This command will send the required files to the API and save the output predictions to `output.csv`.
 
-### Response
+### Response 📬
 
 The API returns a CSV file with the following columns:
 
@@ -192,7 +192,7 @@ Please ensure your code adheres to existing styles and includes appropriate comm
 - **Unit Tests**: Adding comprehensive tests to ensure code reliability.
 
 
-## 📞 Support
+## 📲 Support
 
 If you have any questions or need assistance, please open an issue in the repository.
 
@@ -224,8 +224,4 @@ Stay tuned for updates! 🚀
 - **Dependency Graph Data**: [deepfunding/dependency-graph](https://github.com/deepfunding/dependency-graph)
 - **Airbyte Integration**: [Airbyte Documentation](https://docs.airbyte.io/)
 
----
 
-*This README is designed to help developers understand, set up, and contribute to the Dependency Graph Analyzer project. For more details, please refer to the documentation or contact the project maintainers.*
-
----
