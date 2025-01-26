@@ -41,9 +41,9 @@ cd dependency-graph-analyzer
 
 ⚠️GitHub Token is required in the configuration otherwise it will result in an error please add your github token.
 
-If you have any application properties to set, you can modify the `src/main/resources/application.properties` file:
-🔑
-```properties
+🔑 you can modify the properties file at `src/main/resources/application.properties` :
+
+```properties📌
 github.token= " Your Github Token Here "
 spring.servlet.multipart.max-file-size=50MB
 spring.servlet.multipart.max-request-size=50MB
