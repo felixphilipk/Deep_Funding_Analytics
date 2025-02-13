@@ -9,6 +9,7 @@ import org.apache.commons.math3.optim.nonlinear.scalar.*;
 import org.apache.commons.math3.optim.nonlinear.scalar.noderiv.CMAESOptimizer;
 import org.apache.commons.math3.random.MersenneTwister;
 import org.apache.commons.math3.random.RandomGenerator;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
 
@@ -16,6 +17,7 @@ import com.deepfunding.dependency_graph_analyzer.model.Observation;
 import com.deepfunding.dependency_graph_analyzer.model.TestObservation;
 import com.deepfunding.dependency_graph_analyzer.model.DependencyEdge;
 import com.deepfunding.dependency_graph_analyzer.model.RepoFeatures;
+import com.deepfunding.dependency_graph_analyzer.service.GitHubDataService;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,8 +31,15 @@ import java.util.*;
 
 @Service
 public class ModelService {
-        // Logger instance
-        private static final Logger logger = LoggerFactory.getLogger(ModelService.class);
+    // Logger instance
+    private static final Logger logger = LoggerFactory.getLogger(ModelService.class);
+
+    private final GitHubDataService gitHubDataService;
+
+    @Autowired
+    public ModelService(GitHubDataService gitHubDataService) {
+        this.gitHubDataService = gitHubDataService;
+    }
 
     private Map<String, Integer> repoToId = new HashMap<>();
     private List<String> idToRepo = new ArrayList<>();
@@ -56,6 +65,10 @@ public class ModelService {
         assignRepositoryIds();
         numRepos = idToRepo.size();
         initializeParameters();
+        loadRepositoryFeatures();
+        double medianFunding = 50000.0; // Median funding amount
+        double iqrFunding = 30000.0; // Interquartile range of funding amount
+        normalizeFunding(medianFunding,iqrFunding);
     }
 
     // Assign integer IDs to repositories
@@ -80,134 +93,112 @@ public class ModelService {
     }
 
     private int getRepositoryId(String repoURL) {
-        if (!repoToId.containsKey(repoURL)) {
-            int id = idToRepo.size();
-            repoToId.put(repoURL, id);
-            idToRepo.add(repoURL);
-        }
-        return repoToId.get(repoURL);
+      return repoToId.computeIfAbsent(repoURL, url->{
+        int newId = idToRepo.size();
+        idToRepo.add(url);
+        return newId;
+      });
     }
 
     // Initialize theta parameters
     public void initializeParameters() {
         theta = new double[numRepos];
         for (int i = 0; i < numRepos; i++) {
-            theta[i] = Math.log(Math.max(calculateInitialBeta(i), 1e-6));
+            theta[i] = 0.0;
         }
     }
 
-    private double calculateInitialBeta(int repoId) {
-        String repoURL = idToRepo.get(repoId);
-        double totalWeight = 0.0;
-        int count = 0;
-        for (Observation obs : trainingObservations) {
-            if (obs.getProjectAId() == repoId) {
-                totalWeight += obs.getWeightA();
-                count++;
-            } else if (obs.getProjectBId() == repoId) {
-                totalWeight += obs.getWeightB();
-                count++;
-            }
+    // Normalize funding amounts
+    private void normalizeFunding(double median , double iqr){ 
+        for(Observation obs : trainingObservations){
+        obs.computeNormalizedFundingRobust(median,iqr);
         }
-        return (count > 0) ? totalWeight / count : 1.0;
+       for(TestObservation obs : testObservations){
+        if (iqr>0){
+            double scaled = (obs.getTotalAmountUSD()- median)/iqr;
+            obs.setNormalizedFunding(1.0/(1.0 + Math.exp(-scaled)));
+        }
+        else{
+            obs.setNormalizedFunding(0.0);
+        }
+       }
+    }
+    private double calculateInitialBeta(int repoId) {
+    RepoFeatures features = repoFeaturesMap.get(repoId);
+    double baseWeight = 1.0;
+    double totalNormalizedFunding =0.0;
+    for(Observation obs : trainingObservations){
+        if(obs.getProjectAId() == repoId){
+            baseWeight += obs.getWeightA();
+            totalNormalizedFunding += obs.getNormalizedFunding();
+        }
+        else if (obs.getProjectBId() == repoId){
+            baseWeight += obs.getWeightB();
+            totalNormalizedFunding += obs.getNormalizedFunding();
+        }
+    }
+
+        return baseWeight * (1 + (features != null ? (features.getStars() * 0.001 + totalNormalizedFunding * 0.1) : 0));
+    }
+
+    // Load repository features 
+    private void loadRepositoryFeatures() {
+       for(int i=0; i<numRepos; i++){
+           String repoURL = idToRepo.get(i);
+            try{
+                repoFeaturesMap.put(i,gitHubDataService.getRepositoryFeatures(repoURL));
+            }
+            catch(Exception e){
+                logger.error("Failed to load features for repository: {}", repoURL, e);
+                repoFeaturesMap.put(i, new RepoFeatures(0.0, 0, 0, 0, 0));
+            }
+       }
     }
 
     // Mean Square Error Function
     private class MSEFunction implements MultivariateFunction {
-        private final double lambda = 1e-6; // Regularization parameter
-
-        // Add a counter for function evaluations
-        private int evaluationCount = 0;
-        private final int logInterval = 10; // Adjust the interval as needed
-        private final int maxEvaluations; // Match this to your MaxEval value
-
-        public MSEFunction(int maxEvaluations) {
-            this.maxEvaluations = maxEvaluations;
-            logger.info("MSEFunction initialized with maxEvaluations = {}", maxEvaluations);
-        }
-
         @Override
         public double value(double[] thetas) {
-            logger.debug("MSEFunction.value() called");
             double mse = 0.0;
-            try{
+            // Loop over all training observations.
             for (Observation obs : trainingObservations) {
-                Integer projectAId = obs.getProjectAId();
-                Integer projectBId = obs.getProjectBId();
-
-                if(projectAId==null || projectBId == null||
-                projectAId<0 || projectAId>=thetas.length ||
-                projectBId<0 || projectBId>=thetas.length){
-                    logger.error("Invalid project ID's in observation: {}" + obs);
-                    continue;
-                }
+                int idA = obs.getProjectAId();
+                int idB = obs.getProjectBId();
+                double thetaA = thetas[idA];
+                double thetaB = thetas[idB];
                 
-                double thetaA = thetas[projectAId];
-                double thetaB = thetas[projectBId];
-
-                double deltaTheta = thetaA - thetaB;
-                double probA = 1.0 / (1.0 + Math.exp(-deltaTheta));
-
-                // Ensure probA is within (1e-10, 1 - 1e-10)
-                probA = Math.min(Math.max(probA, 1e-10), 1 - 1e-10);
-                double error = probA - obs.getObservedProbA();
+                // Adjusted multipliers: Increase repo effect and funding effect contribution.
+                double repoEffectA = repoFeaturesMap.containsKey(idA)
+                        ? repoFeaturesMap.get(idA).getStars() * 0.005  // increased from 0.001 to 0.005
+                        : 0.0;
+                double repoEffectB = repoFeaturesMap.containsKey(idB)
+                        ? repoFeaturesMap.get(idB).getStars() * 0.005
+                        : 0.0;
+                
+                // Increase funding multiplier from 0.1 to 0.3.
+                double fundingEffectA = obs.getNormalizedFunding() * 0.3;
+                
+                // Compute effective strengths.
+                double effectiveA = thetaA + repoEffectA + fundingEffectA;
+                double effectiveB = thetaB + repoEffectB;
+                
+                // Use logistic function to predict probability.
+                double prediction = 1.0 / (1.0 + Math.exp(-(effectiveA - effectiveB)));
+                
+                // Use the observed probability as target (assumed provided by the observation)
+                double error = prediction - obs.getObservedProbA();
                 mse += error * error;
             }
-
-            
-            // Incorporate dependency graph into mse
-            for (DependencyEdge edge : dependencyEdges) {
-                Integer sourceId = repoToId.get(edge.getSource());
-                Integer targetId = repoToId.get(edge.getTarget());
-                
-                if (sourceId == null || targetId == null ||
-                sourceId < 0 || sourceId >= thetas.length ||
-                targetId < 0 || targetId >= thetas.length) {
-                logger.error("Invalid source/target IDs in edge: {}", edge);
-                continue; // Skip or handle appropriately
-            }
-
-                double thetaSource = thetas[sourceId];
-                double thetaTarget = thetas[targetId];
-
-                // We can define a relationship, e.g., thetas should reflect the edge weights
-                double edgeWeight = edge.getWeight();
-
-                // Add a penalty if the difference between theta values doesn't align with edge weight
-                double expectedThetaDiff = Math.log(edgeWeight + 1e-6); // To avoid log(0)
-                double actualThetaDiff = thetaTarget - thetaSource;
-
-                double edgeError = actualThetaDiff - expectedThetaDiff;
-                mse += edgeError * edgeError;
-            }
-
-            // Mean error
             mse /= trainingObservations.size();
-
-            // Regularization term
-            double reg = 0.0;
-            for (double t : thetas) {
-                reg += t * t;
+            
+            // L2 regularization to prevent overfitting.
+            double l2norm = 0.0;
+            for (double param : thetas) {
+                l2norm += param * param;
             }
-            reg = (lambda / numRepos) * reg;
-            mse += reg;
-
-            // Increment evaluation count
-            evaluationCount++;
-
-            // Estimate progress percentage
-            double progress = ((double) evaluationCount / maxEvaluations) * 100;
-
-            // Log progress at specified intervals
-            if (evaluationCount % logInterval == 0 || evaluationCount ==1) {
-            logger.info("Function evaluations: {}/{} ({:.2f}%), Current MSE: {}", evaluationCount, maxEvaluations, progress, mse);
-            }
-        }
-        catch (Exception e) {
-            logger.error("Exception in MSEFunction.value()", e);
-            throw e;
-            }
-        return mse;
+            double lambdaRegularization = 0.01;
+            mse += lambdaRegularization * l2norm;
+            return mse;
         }
     }
 
@@ -215,110 +206,50 @@ public class ModelService {
     public void optimizeParameters() {
         logger.info("Starting optimization...");
         // Tolerance for convergence
-        double relativeThreshold = 1e-6;
-        double absoluteThreshold = 1e-6;
-        int maxEvaluations = 5; // Set your desired maximum evaluations
+        int maxIterations = 10000;
+        int populationSize =200;
+        double sigma = 0.5;
 
         // Create RandomGenerator instance
-        RandomGenerator randomGenerator = new MersenneTwister(42); // Seed can be set as needed
+        RandomGenerator randomGenerator = new MersenneTwister(); // Seed can be set as needed
 
         // Create optimizer with custom convergence criteria
         CMAESOptimizer optimizer = new CMAESOptimizer(
-                maxEvaluations,                   // maxIterations
-                -Double.MAX_VALUE,      // stopFitness (no fitness stopping criterion)
+            maxIterations,                   // maxIterations
+                1e-9,      // stopFitness (no fitness stopping criterion)
                 true,                   // isActiveCMA
                 0,                      // diagonalOnly
                 0,                      // checkFeasibleCount
                 randomGenerator,        // random
                 false,                  // generateStatistics
-                new SimpleValueChecker(relativeThreshold, absoluteThreshold)
+                null
         );
+ // Initial guess is the current theta vector.
+ double[] initialGuess = theta;
+ // Set lower and upper bounds. Here parameters are assumed bounded by [-1000, 1000].
+ double[] lowerBound = new double[theta.length];
+ double[] upperBound = new double[theta.length];
+ Arrays.fill(lowerBound, -1000);
+ Arrays.fill(upperBound, 1000);
 
-        // Initial guess
-        double[] startPoint = theta.clone();
-
-        //Adjust population size 
-        int populationSize = 4 + (int) (3* Math.log(numRepos));
-
-        // Initial standard deviation (sigma)
-        double[] sigmas = new double[numRepos];
-        Arrays.fill(sigmas, 0.5); // Set initial standard deviation for each parameter
-
-        // Define optimization problem
-        MSEFunction mseFunction = new MSEFunction(maxEvaluations);
-        ObjectiveFunction objectiveFunction = new ObjectiveFunction(mseFunction);
-
-        // Define bounds
-        double[] lowerBounds = new double[numRepos];
-        Arrays.fill(lowerBounds, -10); // Lower bound for theta
-
-        double[] upperBounds = new double[numRepos];
-        Arrays.fill(upperBounds, 10); // Upper bound for theta
-         // Perform optimization
-         logger.info("Number of repositories (numRepos): {}", numRepos);
-         logger.info("Initial startPoint length: {}", startPoint.length);
-         logger.info("Sigmas length: {}", sigmas.length);
-         logger.info("Lower bounds length: {}", lowerBounds.length);
-         logger.info("Upper bounds length: {}", upperBounds.length);
-
-         // Optionally, log the contents
-         logger.debug("Initial startPoint values: {}", Arrays.toString(startPoint));
-         logger.debug("Sigmas values: {}", Arrays.toString(sigmas));
-         logger.debug("Lower bounds: {}", Arrays.toString(lowerBounds));
-         logger.debug("Upper bounds: {}", Arrays.toString(upperBounds));
-
-         // Validate input parameters
-         for (int i = 0; i < numRepos; i++) {
-             if (Double.isNaN(startPoint[i]) || Double.isInfinite(startPoint[i])) {
-                 logger.error("Invalid value in startPoint at index {}: {}", i, startPoint[i]);
-                 throw new IllegalArgumentException("Invalid startPoint value.");
-             }
-             if (Double.isNaN(sigmas[i]) || Double.isInfinite(sigmas[i]) || sigmas[i] <= 0) {
-                 logger.error("Invalid sigma at index {}: {}", i, sigmas[i]);
-                 throw new IllegalArgumentException("Invalid sigma value.");
-             }
-             if (Double.isNaN(lowerBounds[i]) || Double.isInfinite(lowerBounds[i]) ||
-                 Double.isNaN(upperBounds[i]) || Double.isInfinite(upperBounds[i])) {
-                 logger.error("Invalid bounds at index {}: lower={}, upper={}", i, lowerBounds[i], upperBounds[i]);
-                 throw new IllegalArgumentException("Invalid bounds value.");
-             }
-             if (lowerBounds[i] >= upperBounds[i]) {
-                 logger.error("Lower bound is not less than upper bound at index {}: lower={}, upper={}", i, lowerBounds[i], upperBounds[i]);
-                 throw new IllegalArgumentException("Bounds error.");
-             }
-             if (startPoint[i] < lowerBounds[i] || startPoint[i] > upperBounds[i]) {
-                 logger.error("startPoint[{}] out of bounds: value={}, lower={}, upper={}", i, startPoint[i], lowerBounds[i], upperBounds[i]);
-                 throw new IllegalArgumentException("startPoint out of bounds.");
-             }
-         }
-
-        try {
+ // Wrap our objective function which computes (MSE + L2 regularization).
+ MSEFunction mseFunction = new MSEFunction();
+ try {
+     PointValuePair result = optimizer.optimize(
+             new MaxEval(10000), // Increased number of evaluations.
+             new ObjectiveFunction(mseFunction),
+             GoalType.MINIMIZE,
+             new InitialGuess(initialGuess),
+             new CMAESOptimizer.Sigma(Arrays.stream(initialGuess).map(x -> sigma).toArray()),
+             new SimpleBounds(lowerBound, upperBound)
+     );
+     // Update theta with the optimized parameters.
+     theta = result.getPoint();
+     logger.info("Optimization complete. Optimized theta parameters updated.");
+ } catch (Exception e) {
+     logger.error("Optimization failed", e);
+ }
         
-            logger.info("Calling optimizer.optimize()...");
-            PointValuePair optimum = optimizer.optimize(
-                    new MaxEval(maxEvaluations),
-                    objectiveFunction,
-                    GoalType.MINIMIZE,
-                    new InitialGuess(startPoint),
-                    new CMAESOptimizer.Sigma(sigmas),
-                    new SimpleBounds(lowerBounds, upperBounds),
-                    new CMAESOptimizer.PopulationSize(populationSize)
-            );
-            logger.info("Optimization completed.");
-
-            theta = optimum.getPoint().clone();
-
-            // Compute beta_i = exp(theta_i)
-            beta = new double[numRepos];
-            for (int i = 0; i < numRepos; i++) {
-                beta[i] = Math.exp(theta[i]);
-            }
-        } catch (Exception e) {
-            logger.error("Optimization failed", e);
-            System.err.println("Optimization failed");
-            e.printStackTrace();
-            
-        }
     }
 
     // Predict test data
@@ -327,36 +258,45 @@ public class ModelService {
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
         try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(outputStream))) {
             writer.write("id,pred\n");
+            // For each test observation, predict the probability using theta parameters
             for (TestObservation obs : testObservations) {
-                String projectAURL = obs.getProjectAURL();
-                String projectBURL = obs.getProjectBURL();
-
-                Integer projectAId = repoToId.get(projectAURL);
-                Integer projectBId = repoToId.get(projectBURL);
-
-                double betaA = 1.0;
-                double betaB = 1.0;
-
-                if (projectAId != null) {
-                    betaA = beta[projectAId];
-                } else {
-                    System.out.println("Repository not found in training data: " + projectAURL);
-                }
-                if (projectBId != null) {
-                    betaB = beta[projectBId];
-                } else {
-                    System.out.println("Repository not found in training data: " + projectBURL);
-                }
-                double probA = betaA / (betaA + betaB);
-
-                // Round to 11 decimal places
-                String formattedProb = String.format("%.11f", probA);
-                writer.write(obs.getId() + "," + formattedProb + "\n");
+                int projectAId = obs.getProjectAId();
+                int projectBId = obs.getProjectBId();
+                double thetaA = theta[projectAId];
+                double thetaB = theta[projectBId];
+            // Incorporate repository features. Here we use the 'stars' attribute as an example.
+            double repoEffectA = repoFeaturesMap.containsKey(projectAId)
+                    ? repoFeaturesMap.get(projectAId).getStars() * 0.001
+                    : 0.0;
+            double repoEffectB = repoFeaturesMap.containsKey(projectBId)
+                    ? repoFeaturesMap.get(projectBId).getStars() * 0.001
+                    : 0.0;
+            
+            // Incorporate funding information. For instance, adding a funding effect for project A.
+            double fundingEffectA = obs.getNormalizedFunding() * 0.1;
+            
+            // Compute an effective strength by adding the base theta, repository and funding effects.
+            double effectA = thetaA + repoEffectA + fundingEffectA;
+            double effectB = thetaB + repoEffectB; // assuming project B gets no additional funding effect
+            
+            double diff = effectA - effectB;
+            // Clip the diff to avoid overflow in exponential function.
+            if (diff > 700) {
+                diff = 700;
+            } else if (diff < -700) {
+                diff = -700;
             }
-            writer.flush();
+            double pred = 1.0 / (1.0 + Math.exp(-diff));
+            
+            String obsId = obs.getId();
+            if (obsId == null || obsId.trim().isEmpty()) {
+                obsId = String.format("%d_%d", projectAId, projectBId);
+            }
+            writer.write(String.format("%s,%.11f\n", obsId, pred));
         }
-        return new ByteArrayResource(outputStream.toByteArray());
-}
+    }
+    return new ByteArrayResource(outputStream.toByteArray());
+    }
 
     // Calculate training MSE
     public double calculateTrainingMSE() {

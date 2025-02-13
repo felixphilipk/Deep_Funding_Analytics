@@ -12,8 +12,11 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.deepfunding.dependency_graph_analyzer.model.DependencyEdge;
 import com.deepfunding.dependency_graph_analyzer.model.Observation;
 import com.deepfunding.dependency_graph_analyzer.model.TestObservation;
+import org.apache.commons.io.input.BOMInputStream;
+import java.nio.charset.StandardCharsets;
 
 import java.io.*;
+import java.text.NumberFormat;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -27,12 +30,19 @@ public class DataIngestionService {
              CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withFirstRecordAsHeader())) {
 
             for (CSVRecord csvRecord : csvParser) {
+                try{
                 String projectAURL = csvRecord.get("project_a");
                 String projectBURL = csvRecord.get("project_b");
                 double weightA = Double.parseDouble(csvRecord.get("weight_a"));
                 double weightB = Double.parseDouble(csvRecord.get("weight_b"));
-
-                trainingObservations.add(new Observation(projectAURL, projectBURL, weightA, weightB));
+                double totalAmountUSD = Double.parseDouble(csvRecord.get("total_amount_usd"));
+                String funder = csvRecord.get("funder");
+                String quarter = csvRecord.get("quarter");
+                trainingObservations.add(new Observation(projectAURL, projectBURL, weightA, weightB, totalAmountUSD, funder, quarter));
+                }
+                catch( IllegalArgumentException e){
+                    System.err.println("Invalid data format in row: " + csvRecord.getRecordNumber() + " - " + e.getMessage());
+                }
             }
         }
         return trainingObservations;
@@ -41,15 +51,22 @@ public class DataIngestionService {
     // Method to read test data from CSV
     public List<TestObservation> readTestData(MultipartFile file) throws IOException {
         List<TestObservation> testObservations = new ArrayList<>();
-        try (Reader reader = new InputStreamReader(file.getInputStream());
-             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withFirstRecordAsHeader())) {
+        try (BOMInputStream bomIn = new BOMInputStream(file.getInputStream());
+            Reader reader = new InputStreamReader(bomIn, StandardCharsets.UTF_8);
+            CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withCommentMarker('/')    // Lines starting with '/' are ignored.
+            .withFirstRecordAsHeader()
+            .withIgnoreHeaderCase()
+            .withTrim())) {
 
-            for (CSVRecord csvRecord : csvParser) {
+                for (CSVRecord csvRecord : csvParser) {
                 String id = csvRecord.get("id");
                 String projectAURL = csvRecord.get("project_a");
                 String projectBURL = csvRecord.get("project_b");
+                double totalAmountUSD = Double.parseDouble(csvRecord.get("total_amount_usd"));
+                String funder = csvRecord.get("funder");
+                String quarter = csvRecord.get("quarter");
 
-                testObservations.add(new TestObservation(id, projectAURL, projectBURL));
+                testObservations.add(new TestObservation(id, projectAURL, projectBURL, totalAmountUSD, funder, quarter));
             }
         }
         return testObservations;
@@ -57,7 +74,6 @@ public class DataIngestionService {
  
  // Method to read dependency graph from CSV
     public List<DependencyEdge> readDependencyGraphFromCSV(MultipartFile file) throws IOException {
-    
         List<DependencyEdge> dependencyEdges = new ArrayList<>();
         try(Reader reader = new InputStreamReader(file.getInputStream());
             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withFirstRecordAsHeader()
@@ -95,7 +111,9 @@ public class DataIngestionService {
 
             }
         }
-  
+        catch(NumberFormatException e){
+            System.err.println("Invalid weight fromat in CSV: " + e.getMessage());
+        }
         return dependencyEdges;
     }
 
