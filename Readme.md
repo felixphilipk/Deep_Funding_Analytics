@@ -210,14 +210,7 @@ Happy coding! 👩‍💻👨‍💻
 
 Stay tuned for updates! 🚀
 
----
 
-## Important Notes
-
-- **Disclaimer**: This project is a challenge to build a deep funding model and is **not associated with Deep Funding**.
-- **Data Sources**: The dependency graph and other data can be found in the [deepfunding/dependency-graph](https://github.com/deepfunding/dependency-graph) repository.
-
----
 
 ## Resources 📚
 
