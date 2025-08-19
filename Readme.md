@@ -212,6 +212,6 @@ Stay tuned for updates! 🚀
 ## Resources 📚
 
 - **Dependency Graph Data**: [deepfunding/dependency-graph](https://github.com/deepfunding/dependency-graph)
-- **Airbyte Integration**: [Airbyte Documentation](https://docs.airbyte.io/)
+
 
 
