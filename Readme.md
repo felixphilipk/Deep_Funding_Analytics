@@ -2,8 +2,6 @@
 
 Welcome to the **Dependency Graph Analyzer**! This project aims to predict funding allocation between open-source software repositories based on historical data and their dependency relationships. This is a challenge project to build a deep funding model.
 
-We plan to integrate **Airbyte** for ingesting real-time data from multiple sources, specifically for the data listed in the [deepfunding/dependency-graph](https://github.com/deepfunding/dependency-graph) repository.
-
 ## 🚀 Getting Started
 
 These instructions will help you set up and run the project on your local machine for development and testing purposes.
@@ -26,7 +24,6 @@ You will need the following data files to run the model which is located in data
 
 Download the necessary data files from the [deepfunding/dependency-graph](https://github.com/deepfunding/dependency-graph) repository or use your own data. Ensure these files are accessible to the application and change the schema accordingly.
 
-> **Note:** We are planning to integrate real-time data ingestion using **Airbyte** in the future! 🌐
 
 ## 📥 Installation
 
